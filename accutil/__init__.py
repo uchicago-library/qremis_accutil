@@ -72,12 +72,12 @@ def check_acc_exists(acc_endpoint, acc_id):
     try:
         resp = requests.get(target_acc_url)
         if not resp.status_code == 200:
-            raise ValueError("Bad response code!")
+            return False
         j = resp.json()
-        if not j['_self']['identifier'] == acc_id:
-            raise ValueError("Bad acc identifier!")
+        if j['_self']['identifier'] != acc_id:
+            return False
     except:
-        raise ValueError("Something bad went on confirming the acc exists!")
+        return False
     return True
 
 
