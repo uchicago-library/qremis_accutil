@@ -128,7 +128,7 @@ def ingest_file(*args):
     else:
         output['root'] = None
     output['success'] = False
-    output['data'] = None
+    output['data'] = {}
 
     try:
         # faking failures for debugging
@@ -136,7 +136,6 @@ def ingest_file(*args):
         #     msg = "This is a test error!"
         #     log.critical(msg)
         #     raise RuntimeError(msg)
-        #  Start building the data dict we're going to throw at the endpoint.
         data = {}
         data['accession_id'] = acc_id
         # Compute our originalName from the path, considering it relative to a
@@ -171,19 +170,20 @@ def ingest_file(*args):
             data['md5'] = precomputed_md5
         else:
             data['md5'] = md5(path, buff)
+        output['data']['md5'] = data['md5']
 
         # TODO: Handle remote qremis generation
         qremis_record = make_record(path)
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
 
         # POST qremis
-        pass
+        # TODO
 
         # GET qremis
-        pass
+        # TODO
 
         # Compare
-        pass
+        # TODO
 
         # POST object
         content_target = LTS_FS.new_file(_id=identifier)
@@ -193,6 +193,7 @@ def ingest_file(*args):
                 content_target.write(z)
                 z = src.read(buff)
         content_target.close()
+        output['data']['object_id'] = identifier
         log.debug("Content saved")
 
         # GET object? <-- should this be conditional?
@@ -201,16 +202,19 @@ def ingest_file(*args):
             raise RuntimeError("Couldn't retrieve object")
 
         # Compare <-- should this be conditional?
+        # TODO: Write this fixity check to the qremis db
         remote_md5 = gr_entry.md5
         if remote_md5 != data['md5']:
             raise RuntimeError("{} != {}".format(remote_md5, data['md5']))
+        else:
+            output['data']['remote_fixity_check'] = True
 
         # Add objID to Acc
         idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
         idnest_resp.raise_for_status()
 
         # Add ingest event to qremis
-        pass
+        # TODO
 
         # Cleanup
 
@@ -222,7 +226,7 @@ def ingest_file(*args):
 
         # If we redownloaded the file to check its remote storage is secure
         # we remove it now
-        pass
+        # TODO
 
         return output
 
