@@ -7,16 +7,15 @@ from hashlib import md5 as _md5
 from uuid import uuid4
 from configparser import ConfigParser
 from os import curdir, environ, fsencode
-from os.path import expanduser
+from os.path import expanduser, join
 from multiprocessing.pool import ThreadPool
 import logging
 from datetime import datetime
-# from random import randint
+from tempfile import TemporaryDirectory
+#from random import randint
 
 import requests
-
-from pymongo import MongoClient
-from gridfs import GridFS
+from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 from qremiser.blueprint.lib import make_record
 
@@ -48,7 +47,7 @@ def sanitize_path(some_path):
     return bytes(some_path).hex()
 
 
-def md5(path, buff=1024*1000*8):
+def md5(path, buff=1024*8):
     hasher = _md5()
     with open(path, 'rb') as f:
         data = f.read(buff)
@@ -112,15 +111,9 @@ def ingest_file(*args):
     buff = args[3]
     root = args[4]
     running_buffer_delete = args[5]
-    mongo_host = args[6]
-    mongo_port = args[7]
-    mongo_db_name = args[8]
-    acc_idnest_url = args[9]
-    qremis_api_url = args[10]
-
-    _lts_client = MongoClient(mongo_host, mongo_port)
-    _lts_db = _lts_client[mongo_db_name]
-    LTS_FS = GridFS(_lts_db)
+    archstor_url = args[6]
+    acc_idnest_url = args[7]
+    qremis_api_url = args[8]
 
     output = {}
     output['filepath'] = sanitize_path(fsencode(path))
@@ -174,7 +167,7 @@ def ingest_file(*args):
         output['data']['md5'] = data['md5']
 
         # TODO: Handle remote qremis generation
-        qremis_record = make_record(path)
+        qremis_record = make_record(path, originalName=data['name'])
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
 
         # POST qremis
@@ -216,28 +209,37 @@ def ingest_file(*args):
             pass
 
         # POST object
-        content_target = LTS_FS.new_file(_id=identifier)
-        with open(path, 'rb') as src:
-            z = src.read(buff)
-            while z:
-                content_target.write(z)
-                z = src.read(buff)
-        content_target.close()
+        with open(path, "rb") as fd:
+            payload = {}
+            payload['object'] = ('object', fd)
+            ingress_post_multipart_encoder = MultipartEncoder(payload)
+            resp = requests.put(
+                archstor_url+identifier,
+                data=ingress_post_multipart_encoder,
+                headers={"Content-Type":
+                         ingress_post_multipart_encoder.content_type},
+                stream=True
+            )
+
         output['data']['object_id'] = identifier
         log.debug("Content saved")
 
         # GET object? <-- should this be conditional?
-        gr_entry = LTS_FS.find_one({"_id": identifier})
-        if not gr_entry:
-            raise RuntimeError("Couldn't retrieve object")
+        with TemporaryDirectory() as tmp_dir:
+            dl_copy_path = join(tmp_dir, uuid4().hex)
+            dl_copy = requests.get(archstor_url+identifier, stream=True)
+            dl_copy.raise_for_status()
+            with open(dl_copy_path, 'wb') as f:
+                for chunk in dl_copy.iter_content(chunk_size=1024):
+                    f.write(chunk)
 
-        # Compare <-- should this be conditional?
-        # TODO: Write this fixity check to the qremis db
-        remote_md5 = gr_entry.md5
-        if remote_md5 != data['md5']:
-            raise RuntimeError("{} != {}".format(remote_md5, data['md5']))
-        else:
-            output['data']['remote_fixity_check'] = True
+            # Compare <-- should this be conditional?
+            # TODO: Write this fixity check to the qremis db
+            remote_md5 = md5(dl_copy_path)
+            if remote_md5 != data['md5']:
+                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, data['md5']))
+            else:
+                output['data']['remote_fixity_check'] = True
 
         # Add objID to Acc
         idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
@@ -257,11 +259,12 @@ def ingest_file(*args):
         # If we redownloaded the file to check its remote storage is secure
         # we remove it now
         # TODO
+        # Note: With GridFS hardcoded in here instead of the materialsuite
+        # endpoint abstraction we can cheat for now with the GridOut.md5 attr
 
         return output
 
     except Exception as e:
-        raise
         output['data'] = "{}: {}".format(str(type(e)), str(e))
     return output
 
@@ -336,15 +339,7 @@ class AccUtil:
             default=None
         )
         parser.add_argument(
-            "--mongo-host",
-            default=None
-        )
-        parser.add_argument(
-            "--mongo-port",
-            default=None
-        )
-        parser.add_argument(
-            "--mongo-db-name",
+            "--archstor_url",
             default=None
         )
         # Parse arguments into args namespace
@@ -425,29 +420,13 @@ class AccUtil:
             self.buff = 1024*1000*8
         log.debug("buff: {}".format(str(self.buff)))
 
-        if args.mongo_host:
-            self.mongo_host = args.mongo_host
-        elif config["DEFAULT"].get("MONGO_HOST"):
-            self.mongo_host = config["DEFAULT"].get("MONGO_HOST")
+        if args.archstor_url:
+            self.archstor_url = args.archstor_url
+        elif config["DEFAULT"].get("ARCHSTOR_URL"):
+            self.archstor_url = config["DEFAULT"].get("ARCHSTOR_URL")
         else:
-            self.mongo_host = "localhost"
-        log.debug("mongo_host: {}".format(str(self.mongo_host)))
-
-        if args.mongo_port:
-            self.mongo_port = int(args.mongo_port)
-        elif config["DEFAULT"].get("MONGO_PORT"):
-            self.mongo_port = int(config["DEFAULT"].get("MONGO_PORT"))
-        else:
-            self.mongo_port = 27017
-        log.debug("mongo_port: {}".format(str(self.mongo_port)))
-
-        if args.mongo_db_name:
-            self.mongo_db_name = args.mongo_db_name
-        elif config["DEFAULT"].get("MONGO_DB_NAME"):
-            self.mongo_db_name = config["DEFAULT"].get("MONGO_DB_NAME")
-        else:
-            self.mongo_db_name = "lts"
-        log.debug("mongo_db_name: {}".format(str(self.mongo_db_name)))
+            raise ValueError("Archstor url not set")
+        log.debug("archstor_url: {}".format(str(self.archstor_url)))
 
         if args.qremis_url:
             self.qremis_url = args.qremis_url
@@ -523,8 +502,8 @@ class AccUtil:
         return ingest_file(
             path, self.acc_id,
             self.buffer_location, self.buff, self.root,
-            self.running_buffer_delete, self.mongo_host,
-            self.mongo_port, self.mongo_db_name, self.acc_endpoint,
+            self.running_buffer_delete, self.archstor_url,
+            self.acc_endpoint,
             self.qremis_url
         )
 
