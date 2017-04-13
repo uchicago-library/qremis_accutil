@@ -167,7 +167,7 @@ def ingest_file(*args):
         output['data']['md5'] = data['md5']
 
         # TODO: Handle remote qremis generation
-        qremis_record = make_record(path)
+        qremis_record = make_record(path, originalName=data['name'])
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
 
         # POST qremis
@@ -265,7 +265,6 @@ def ingest_file(*args):
         return output
 
     except Exception as e:
-        raise
         output['data'] = "{}: {}".format(str(type(e)), str(e))
     return output
 
