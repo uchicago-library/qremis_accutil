@@ -12,7 +12,6 @@ from multiprocessing.pool import ThreadPool
 import logging
 from datetime import datetime
 from tempfile import TemporaryDirectory
-#from random import randint
 
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
@@ -104,49 +103,28 @@ def get_config(config_file=None):
     return ConfigParser()
 
 
-def ingest_file(*args):
-    path = args[0]
-    acc_id = args[1]
-    buffer_location = args[2]
-    buff = args[3]
-    root = args[4]
-    running_buffer_delete = args[5]
-    archstor_url = args[6]
-    acc_idnest_url = args[7]
-    qremis_api_url = args[8]
+def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete,
+                archstor_url, acc_idnest_url, qremis_api_url):
 
     output = {}
-    output['filepath'] = sanitize_path(fsencode(path))
-    if root is not None:
-        output['root'] = sanitize_path(fsencode(root))
-    else:
-        output['root'] = None
-    output['success'] = False
-    output['data'] = {}
 
     try:
-        # faking failures for debugging
-        # if randint(0, 1) == 0:
-        #     msg = "This is a test error!"
-        #     log.critical(msg)
-        #     raise RuntimeError(msg)
-        data = {}
-        data['accession_id'] = acc_id
-        # Compute our originalName from the path, considering it relative to a
-        # root if one was provided
+        output['filepath'] = sanitize_path(fsencode(path))
         if root is not None:
-            originalName = str(Path(path).relative_to(root))
+            output['root'] = sanitize_path(fsencode(root))
         else:
-            originalName = path
-        data['name'] = sanitize_path(fsencode(originalName))
+            output['root'] = None
+        output['success'] = False
+        output['originalName'] = output['filepath'].lstrip(output['root'])
+        output['accession_id'] = acc_id
 
         # If a buffer location is specified, copy the file to there straight
         # away so we don't stress the original media. Then confirm the copy if
         # possible (otherwise emit a warning) and work with that copy from
         # there.
         # TODO: Handling of partial reads?
-        precomputed_md5 = None
         if buffer_location is not None:
+            output['buffered'] = True
             tmp_path = str(Path(buffer_location, uuid4().hex))
             with open(path, 'rb') as src:
                 with open(tmp_path, 'wb') as dst:
@@ -154,20 +132,24 @@ def ingest_file(*args):
                     while d:
                         dst.write(d)
                         d = src.read(buff)
-            precomputed_md5 = md5(tmp_path, buff)
-            if not precomputed_md5 == md5(path, buff):
-                log.warn("The buffered file's md5 does not equal the origin md5!")
+            buffered_md5 = md5(tmp_path, buff)
+            # Tolerate failures on the second read, but emit a warning
+            try:
+                original_md5 = md5(path, buff)
+            except IOError:
+                original_md5 = None
+            if buffered_md5 != original_md5:
+                log.warn("Buffered md5 != original md5! But no read errors reported, continuing...")
             path = Path(tmp_path)
-
-        # Re-use our hash of the buffer location if we have it precomputed.
-        if precomputed_md5:
-            data['md5'] = precomputed_md5
+            output['md5'] = buffered_md5
+            if original_md5 is None:
+                output['bad_second_read_of_origin_media'] = True
         else:
-            data['md5'] = md5(path, buff)
-        output['data']['md5'] = data['md5']
+            output['buffered'] = False
+            output['md5'] = md5(path, buff)
 
         # TODO: Handle remote qremis generation
-        qremis_record = make_record(path, originalName=data['name'])
+        qremis_record = make_record(path, originalName=output['originalName'])
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
 
         # POST qremis
@@ -221,7 +203,7 @@ def ingest_file(*args):
                 stream=True
             )
 
-        output['data']['object_id'] = identifier
+        output['object_id'] = identifier
         log.debug("Content saved")
 
         # GET object? <-- should this be conditional?
@@ -236,10 +218,10 @@ def ingest_file(*args):
             # Compare <-- should this be conditional?
             # TODO: Write this fixity check to the qremis db
             remote_md5 = md5(dl_copy_path)
-            if remote_md5 != data['md5']:
-                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, data['md5']))
+            if remote_md5 != output['md5']:
+                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, output['md5']))
             else:
-                output['data']['remote_fixity_check'] = True
+                output['remote_fixity_check'] = True
 
         # Add objID to Acc
         idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
@@ -256,15 +238,10 @@ def ingest_file(*args):
             remove(path)
         output['success'] = True
 
-        # If we redownloaded the file to check its remote storage is secure
-        # we remove it now
-        # TODO
-        # Note: With GridFS hardcoded in here instead of the materialsuite
-        # endpoint abstraction we can cheat for now with the GridOut.md5 attr
-
         return output
 
     except Exception as e:
+        raise
         output['data'] = "{}: {}".format(str(type(e)), str(e))
     return output
 
