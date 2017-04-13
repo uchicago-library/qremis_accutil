@@ -116,6 +116,7 @@ def ingest_file(*args):
     mongo_port = args[7]
     mongo_db_name = args[8]
     acc_idnest_url = args[9]
+    qremis_api_url = args[10]
 
     _lts_client = MongoClient(mongo_host, mongo_port)
     _lts_db = _lts_client[mongo_db_name]
@@ -177,13 +178,42 @@ def ingest_file(*args):
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
 
         # POST qremis
-        # TODO
-
-        # GET qremis
-        # TODO
-
-        # Compare
-        # TODO
+        for obj in qremis_record.get_object():
+            resp = requests.post(
+                qremis_api_url+"object_list", data={"record": dumps(obj.to_dict())}
+            )
+            if resp.json()['id'] != obj.get_objectIdentifier()[0].get_objectIdentifierValue():
+                raise ValueError("problem posting object")
+        for event in qremis_record.get_event():
+            resp = requests.post(
+                qremis_api_url+"event_list", data={"record": dumps(event.to_dict())}
+            )
+            if resp.json()['id'] != event.get_eventIdentifier()[0].get_eventIdentifierValue():
+                raise ValueError("problem posting event")
+        for relationship in qremis_record.get_relationship():
+            resp = requests.post(
+                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+            )
+            if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
+                raise ValueError("problem posting relationship")
+        try:
+            for rights in qremis_record.get_rights():
+                resp = requests.post(
+                    qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
+                )
+                if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
+                    raise ValueError("problem posting rights")
+        except KeyError:
+            pass
+        try:
+            for agent in qremis_record.get_agent():
+                resp = requests.post(
+                    qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
+                )
+                if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
+                    raise ValueError("problem posting agent")
+        except KeyError:
+            pass
 
         # POST object
         content_target = LTS_FS.new_file(_id=identifier)
@@ -302,6 +332,10 @@ class AccUtil:
             default=None
         )
         parser.add_argument(
+            "--qremis-url", help="The URL of the root of the qremis API",
+            default=None
+        )
+        parser.add_argument(
             "--mongo-host",
             default=None
         )
@@ -415,6 +449,13 @@ class AccUtil:
             self.mongo_db_name = "lts"
         log.debug("mongo_db_name: {}".format(str(self.mongo_db_name)))
 
+        if args.qremis_url:
+            self.qremis_url = args.qremis_url
+        elif config["DEFAULT"].get("QREMIS_URL"):
+            self.qremis_url = config["DEFAULT"].get("QREMIS_URL")
+        else:
+            raise RuntimeError("No qremis api url specified via arg or conf")
+        log.debug("qremis_url: {}".format(str(self.qremis_url)))
         # Real work
 
         # If our acc id is given as "new" create a new one, check to be sure it
@@ -483,7 +524,8 @@ class AccUtil:
             path, self.acc_id,
             self.buffer_location, self.buff, self.root,
             self.running_buffer_delete, self.mongo_host,
-            self.mongo_port, self.mongo_db_name, self.acc_endpoint
+            self.mongo_port, self.mongo_db_name, self.acc_endpoint,
+            self.qremis_url
         )
 
     def ingest_dir(self, path, root=None, filters=[], omit_list=None):
