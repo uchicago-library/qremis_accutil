@@ -17,6 +17,7 @@ import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 from qremiser.blueprint.lib import make_record
+import pyqremis
 
 __author__ = "Brian Balsamo"
 __email__ = "balsamo@uchicago.edu"
@@ -104,45 +105,52 @@ def get_config(config_file=None):
 
 
 def split_and_post_record(qremis_record, qremis_api_url):
+    try:
         for obj in qremis_record.get_object():
             resp = requests.post(
                 qremis_api_url+"object_list", data={"record": dumps(obj.to_dict())}
             )
             if resp.json()['id'] != obj.get_objectIdentifier()[0].get_objectIdentifierValue():
                 raise ValueError("problem posting object")
+    except KeyError:
+        pass
+
+    try:
         for event in qremis_record.get_event():
             resp = requests.post(
                 qremis_api_url+"event_list", data={"record": dumps(event.to_dict())}
             )
             if resp.json()['id'] != event.get_eventIdentifier()[0].get_eventIdentifierValue():
                 raise ValueError("problem posting event")
+    except KeyError:
+        pass
 
-        for relationship in qremis_record.get_relationship():
+    for relationship in qremis_record.get_relationship():
+        resp = requests.post(
+            qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+        )
+        if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
+            raise ValueError("problem posting relationship")
+
+    try:
+        for rights in qremis_record.get_rights():
             resp = requests.post(
-                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+                qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
             )
-            if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
-                raise ValueError("problem posting relationship")
+            if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
+                raise ValueError("problem posting rights")
+    except KeyError:
+        pass
 
-        try:
-            for rights in qremis_record.get_rights():
-                resp = requests.post(
-                    qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
-                )
-                if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
-                    raise ValueError("problem posting rights")
-        except KeyError:
-            pass
-
-        try:
-            for agent in qremis_record.get_agent():
-                resp = requests.post(
-                    qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
-                )
-                if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
-                    raise ValueError("problem posting agent")
-        except KeyError:
-            pass
+    try:
+        for agent in qremis_record.get_agent():
+            resp = requests.post(
+                qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
+            )
+            if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
+                raise ValueError("problem posting agent")
+    except KeyError:
+        pass
 
 
 def post_file_to_archstor(identifier, fp, archstor_url):
@@ -167,19 +175,18 @@ def add_objId_to_acc(acc_idnest_url, acc_id, identifier):
 
 
 def confirm_remote_copy_matches(identifier, archstor_url, comp_md5):
-        with TemporaryDirectory() as tmp_dir:
-            dl_copy_path = join(tmp_dir, uuid4().hex)
-            dl_copy = requests.get(archstor_url+identifier, stream=True)
-            dl_copy.raise_for_status()
-            with open(dl_copy_path, 'wb') as f:
-                for chunk in dl_copy.iter_content(chunk_size=1024):
-                    f.write(chunk)
+    with TemporaryDirectory() as tmp_dir:
+        dl_copy_path = join(tmp_dir, uuid4().hex)
+        dl_copy = requests.get(archstor_url+identifier, stream=True)
+        dl_copy.raise_for_status()
+        with open(dl_copy_path, 'wb') as f:
+            for chunk in dl_copy.iter_content(chunk_size=1024):
+                f.write(chunk)
 
-            # Compare <-- should this be conditional?
-            # TODO: Write this fixity check to the qremis db
-            remote_md5 = md5(dl_copy_path)
-            if remote_md5 != comp_md5:
-                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, comp_md5))
+        remote_md5 = md5(dl_copy_path)
+        if remote_md5 != comp_md5:
+            raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, comp_md5))
+    return remote_md5
 
 
 def secure_incoming_file(path, buffer_location, buff):
@@ -206,6 +213,83 @@ def secure_incoming_file(path, buffer_location, buff):
         buffered_md5 = None
         original_md5 = md5(path, buff)
     return path, original_md5, buffered, buffered_md5
+
+
+def build_and_post_ingest_event(identifier, qremis_api_url):
+    ingest_event = pyqremis.Event(
+        pyqremis.EventIdentifier(
+            eventIdentifierType="uuid",
+            eventIdentifierValue=uuid4().hex
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="Ingestion confirmed into the long term storage environment"
+        ),
+        eventOutcomeInformation=pyqremis.EventOutcomeInformation(
+            eventOutcome="success"
+        ),
+        eventType="ingest",
+        eventDateTime=datetime.now().isoformat()
+    )
+
+    ingest_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=identifier
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=ingest_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=ingest_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to its original ingest event."
+    )
+    ingest_qremis_rec = pyqremis.Qremis(ingest_event, ingest_relationship)
+    split_and_post_record(ingest_qremis_rec, qremis_api_url)
+
+
+def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url):
+    fixity_event = pyqremis.Event(
+        pyqremis.EventIdentifier(
+            eventIdentifierType="uuid",
+            eventIdentifierValue=uuid4().hex
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="performed via md5 comparison of remote and local copies"
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="computed md5 was: {}".format(fixity_md5)
+        ),
+        eventOutcomeInformation=pyqremis.EventOutcomeInformation(
+            eventOutcome="success"
+        ),
+        eventType="fixity check",
+        eventDateTime=datetime.now().isoformat()
+    )
+
+    fixity_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=identifier
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=fixity_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=fixity_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to a fixity check event which took place during original ingest."
+    )
+    fixity_qremis_rec = pyqremis.Qremis(fixity_event, fixity_relationship)
+    split_and_post_record(fixity_qremis_rec, qremis_api_url)
 
 
 def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete,
@@ -244,15 +328,17 @@ def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete
         log.debug("Content saved")
 
         # GET object? <-- should this be conditional?
-        confirm_remote_copy_matches(identifier, archstor_url,
-                                    output['buffered_md5'] if output['buffered_md5'] else output['orig_md5'])
+        fixity_md5 = confirm_remote_copy_matches(
+            identifier, archstor_url,
+            output['buffered_md5'] if output['buffered_md5'] else output['orig_md5']
+        )
+        build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url)
 
         # Add objID to Acc
         add_objId_to_acc(acc_idnest_url, acc_id, identifier)
 
         # Add ingest event to qremis
-        # TODO
-
+        build_and_post_ingest_event(identifier, qremis_api_url)
         # Cleanup
 
         # If we buffered the file into safe storage somewhere in addition to the
@@ -341,6 +427,7 @@ class AccUtil:
             "--archstor_url",
             default=None
         )
+
         # Parse arguments into args namespace
         args = parser.parse_args()
 
