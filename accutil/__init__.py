@@ -212,7 +212,7 @@ def secure_incoming_file(path, buffer_location, buff):
         buffered = False
         buffered_md5 = None
         original_md5 = md5(path, buff)
-    return path, original_md5, buffered, buffered_md5
+    return str(path), original_md5, buffered, buffered_md5
 
 
 def build_and_post_ingest_event(identifier, qremis_api_url):
