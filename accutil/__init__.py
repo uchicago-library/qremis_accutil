@@ -103,6 +103,111 @@ def get_config(config_file=None):
     return ConfigParser()
 
 
+def split_and_post_record(qremis_record, qremis_api_url):
+        for obj in qremis_record.get_object():
+            resp = requests.post(
+                qremis_api_url+"object_list", data={"record": dumps(obj.to_dict())}
+            )
+            if resp.json()['id'] != obj.get_objectIdentifier()[0].get_objectIdentifierValue():
+                raise ValueError("problem posting object")
+        for event in qremis_record.get_event():
+            resp = requests.post(
+                qremis_api_url+"event_list", data={"record": dumps(event.to_dict())}
+            )
+            if resp.json()['id'] != event.get_eventIdentifier()[0].get_eventIdentifierValue():
+                raise ValueError("problem posting event")
+
+        for relationship in qremis_record.get_relationship():
+            resp = requests.post(
+                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+            )
+            if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
+                raise ValueError("problem posting relationship")
+
+        try:
+            for rights in qremis_record.get_rights():
+                resp = requests.post(
+                    qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
+                )
+                if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
+                    raise ValueError("problem posting rights")
+        except KeyError:
+            pass
+
+        try:
+            for agent in qremis_record.get_agent():
+                resp = requests.post(
+                    qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
+                )
+                if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
+                    raise ValueError("problem posting agent")
+        except KeyError:
+            pass
+
+
+def post_file_to_archstor(identifier, fp, archstor_url):
+    with open(fp, "rb") as fd:
+        payload = {}
+        payload['object'] = ('object', fd)
+        ingress_post_multipart_encoder = MultipartEncoder(payload)
+        resp = requests.put(
+            archstor_url+identifier,
+            data=ingress_post_multipart_encoder,
+            headers={"Content-Type":
+                     ingress_post_multipart_encoder.content_type},
+            stream=True
+        )
+        assert(resp.json()['identifier'] == identifier)
+
+
+def add_objId_to_acc(acc_idnest_url, acc_id, identifier):
+    idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
+    idnest_resp.raise_for_status()
+    assert(idnest_resp.json()['Added'][0]['identifier'] == identifier)
+
+
+def confirm_remote_copy_matches(identifier, archstor_url, comp_md5):
+        with TemporaryDirectory() as tmp_dir:
+            dl_copy_path = join(tmp_dir, uuid4().hex)
+            dl_copy = requests.get(archstor_url+identifier, stream=True)
+            dl_copy.raise_for_status()
+            with open(dl_copy_path, 'wb') as f:
+                for chunk in dl_copy.iter_content(chunk_size=1024):
+                    f.write(chunk)
+
+            # Compare <-- should this be conditional?
+            # TODO: Write this fixity check to the qremis db
+            remote_md5 = md5(dl_copy_path)
+            if remote_md5 != comp_md5:
+                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, comp_md5))
+
+
+def secure_incoming_file(path, buffer_location, buff):
+    if buffer_location is not None:
+        buffered = True
+        tmp_path = str(Path(buffer_location, uuid4().hex))
+        with open(path, 'rb') as src:
+            with open(tmp_path, 'wb') as dst:
+                d = src.read(buff)
+                while d:
+                    dst.write(d)
+                    d = src.read(buff)
+        buffered_md5 = md5(tmp_path, buff)
+        # Tolerate failures on the second read, but emit a warning
+        try:
+            original_md5 = md5(path, buff)
+        except IOError:
+            original_md5 = None
+        if buffered_md5 != original_md5:
+            log.warn("Buffered md5 != original md5! But no read errors reported on original write, continuing...")
+        path = Path(tmp_path)
+    else:
+        buffered = False
+        buffered_md5 = None
+        original_md5 = md5(path, buff)
+    return path, original_md5, buffered, buffered_md5
+
+
 def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete,
                 archstor_url, acc_idnest_url, qremis_api_url):
 
@@ -122,110 +227,28 @@ def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete
         # away so we don't stress the original media. Then confirm the copy if
         # possible (otherwise emit a warning) and work with that copy from
         # there.
-        # TODO: Handling of partial reads?
-        if buffer_location is not None:
-            output['buffered'] = True
-            tmp_path = str(Path(buffer_location, uuid4().hex))
-            with open(path, 'rb') as src:
-                with open(tmp_path, 'wb') as dst:
-                    d = src.read(buff)
-                    while d:
-                        dst.write(d)
-                        d = src.read(buff)
-            buffered_md5 = md5(tmp_path, buff)
-            # Tolerate failures on the second read, but emit a warning
-            try:
-                original_md5 = md5(path, buff)
-            except IOError:
-                original_md5 = None
-            if buffered_md5 != original_md5:
-                log.warn("Buffered md5 != original md5! But no read errors reported, continuing...")
-            path = Path(tmp_path)
-            output['md5'] = buffered_md5
-            if original_md5 is None:
-                output['bad_second_read_of_origin_media'] = True
-        else:
-            output['buffered'] = False
-            output['md5'] = md5(path, buff)
+        path, output['orig_md5'], output['buffered'], output['buffered_md5'] = \
+            secure_incoming_file(path, buffer_location, buff)
 
         # TODO: Handle remote qremis generation
         qremis_record = make_record(path, originalName=output['originalName'])
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
+        output['object_id'] = identifier
 
         # POST qremis
-        for obj in qremis_record.get_object():
-            resp = requests.post(
-                qremis_api_url+"object_list", data={"record": dumps(obj.to_dict())}
-            )
-            if resp.json()['id'] != obj.get_objectIdentifier()[0].get_objectIdentifierValue():
-                raise ValueError("problem posting object")
-        for event in qremis_record.get_event():
-            resp = requests.post(
-                qremis_api_url+"event_list", data={"record": dumps(event.to_dict())}
-            )
-            if resp.json()['id'] != event.get_eventIdentifier()[0].get_eventIdentifierValue():
-                raise ValueError("problem posting event")
-        for relationship in qremis_record.get_relationship():
-            resp = requests.post(
-                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
-            )
-            if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
-                raise ValueError("problem posting relationship")
-        try:
-            for rights in qremis_record.get_rights():
-                resp = requests.post(
-                    qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
-                )
-                if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
-                    raise ValueError("problem posting rights")
-        except KeyError:
-            pass
-        try:
-            for agent in qremis_record.get_agent():
-                resp = requests.post(
-                    qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
-                )
-                if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
-                    raise ValueError("problem posting agent")
-        except KeyError:
-            pass
+        split_and_post_record(qremis_record, qremis_api_url)
+        log.debug("qremis POST'd")
 
         # POST object
-        with open(path, "rb") as fd:
-            payload = {}
-            payload['object'] = ('object', fd)
-            ingress_post_multipart_encoder = MultipartEncoder(payload)
-            resp = requests.put(
-                archstor_url+identifier,
-                data=ingress_post_multipart_encoder,
-                headers={"Content-Type":
-                         ingress_post_multipart_encoder.content_type},
-                stream=True
-            )
-
-        output['object_id'] = identifier
+        post_file_to_archstor(identifier, path, archstor_url)
         log.debug("Content saved")
 
         # GET object? <-- should this be conditional?
-        with TemporaryDirectory() as tmp_dir:
-            dl_copy_path = join(tmp_dir, uuid4().hex)
-            dl_copy = requests.get(archstor_url+identifier, stream=True)
-            dl_copy.raise_for_status()
-            with open(dl_copy_path, 'wb') as f:
-                for chunk in dl_copy.iter_content(chunk_size=1024):
-                    f.write(chunk)
-
-            # Compare <-- should this be conditional?
-            # TODO: Write this fixity check to the qremis db
-            remote_md5 = md5(dl_copy_path)
-            if remote_md5 != output['md5']:
-                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, output['md5']))
-            else:
-                output['remote_fixity_check'] = True
+        confirm_remote_copy_matches(identifier, archstor_url,
+                                    output['buffered_md5'] if output['buffered_md5'] else output['orig_md5'])
 
         # Add objID to Acc
-        idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
-        idnest_resp.raise_for_status()
+        add_objId_to_acc(acc_idnest_url, acc_id, identifier)
 
         # Add ingest event to qremis
         # TODO
@@ -279,8 +302,7 @@ class AccUtil:
         )
         parser.add_argument(
             "--buff", help="How much data to load into RAM in one go for " +
-            "various operations. Currently the maximum for this should be " +
-            "~2*n bits in RAM, with n specified in this arg.",
+            "various operations.",
             type=int, action='store', default=None
         )
         parser.add_argument(
