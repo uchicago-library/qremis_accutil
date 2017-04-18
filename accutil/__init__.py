@@ -293,7 +293,11 @@ def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api
 
 
 def ingest_file(path, acc_id, buffer_location, buff, root,
-                archstor_url, acc_idnest_url, qremis_api_url):
+                archstor_url, acc_idnest_url, qremis_api_url,
+                confirm=False):
+
+    # TODO: Handle failure at different parts of the accessioning
+    # process intelligently, reporting the events via qremis
 
     output = {}
 
@@ -327,12 +331,13 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
         post_file_to_archstor(identifier, path, archstor_url)
         log.debug("Content saved")
 
-        # GET object? <-- should this be conditional?
-        fixity_md5 = confirm_remote_copy_matches(
-            identifier, archstor_url,
-            output['buffered_md5'] if output['buffered_md5'] else output['orig_md5']
-        )
-        build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url)
+        # GET object if confirm
+        if confirm:
+            fixity_md5 = confirm_remote_copy_matches(
+                identifier, archstor_url,
+                output['buffered_md5'] if output['buffered_md5'] else output['orig_md5']
+            )
+            build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url)
 
         # Add objID to Acc
         add_objId_to_acc(acc_idnest_url, acc_id, identifier)
@@ -414,8 +419,13 @@ class AccUtil:
             default=None
         )
         parser.add_argument(
-            "--archstor_url",
+            "--archstor_url", help="The URL of the root of the archstor API",
             default=None
+        )
+        parser.add_argument(
+            "--confirm", help="Redownload all objects after uploading to confirm " +
+            "transfer to the object store. Utilizes the buffer location.",
+            action='store_true'
         )
 
         # Parse arguments into args namespace
@@ -499,6 +509,14 @@ class AccUtil:
         else:
             raise RuntimeError("No qremis api url specified via arg or conf")
         log.debug("qremis_url: {}".format(str(self.qremis_url)))
+
+        if args.confirm:
+            self.confirm = args.confirm
+        elif config["DEFAULT"].getboolean("CONFIRM"):
+            self.confirm = config["DEFAULT"].get("CONFIRM")
+        else:
+            self.confirm = False
+        log.debug("confirm: {}".format(str(self.qremis_url)))
         # Real work
 
         # If our acc id is given as "new" create a new one, check to be sure it
@@ -517,10 +535,16 @@ class AccUtil:
                 "accession identifier)"
             log.critical(msg)
             raise RuntimeError(msg)
+
+        # TODO
+        # Create a "run" event to link all ingest events to.
+        pass
+
         # Handle ingesting a single file
         if target.is_file():
             log.debug("Target is a file")
             r = self.ingest_file(str(target))
+
         # Handle ingesting matching files in a dir
         elif target.is_dir():
             log.debug("Target is a dir")
@@ -542,10 +566,13 @@ class AccUtil:
             msg = "Thats not a file or a dir!"
             log.critical(msg)
             raise ValueError(msg)
+
         # Make our results a list regardless, for ease of working with them in
         # the receipt context.
         if not isinstance(r, list):
             r = [r]
+
+        # Determine if we had any problems
         errors = False
         for x in r:
             if x['success'] != True:
@@ -555,6 +582,8 @@ class AccUtil:
             log.warn('Errors have been detected. Please review your receipt.')
         else:
             log.debug("No errors have been detected")
+
+        # Package up our results, save them to a file in the receipt dir
         output['file_results'] = r
         receipt_fname = str(Path(self.receipt_dir, datetime.now().isoformat() +
                                  "_" + uuid4().hex + ".json"))
@@ -568,7 +597,8 @@ class AccUtil:
             self.buffer_location, self.buff, self.root,
             self.archstor_url,
             self.acc_endpoint,
-            self.qremis_url
+            self.qremis_url,
+            confirm=self.confirm
         )
 
     def ingest_dir(self, path, root=None, filters=[], omit_list=None):
