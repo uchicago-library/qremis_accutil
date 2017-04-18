@@ -392,7 +392,7 @@ class AccUtil:
         )
         parser.add_argument(
             "--source_root", help="The root of the  " +
-            "directory that needs to be staged.",
+            "directory that needs to be accessioned.",
             type=str, action='store',
             default=None
         )
