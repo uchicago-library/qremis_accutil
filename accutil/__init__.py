@@ -292,7 +292,7 @@ def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api
     split_and_post_record(fixity_qremis_rec, qremis_api_url)
 
 
-def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete,
+def ingest_file(path, acc_id, buffer_location, buff, root,
                 archstor_url, acc_idnest_url, qremis_api_url):
 
     output = {}
@@ -343,7 +343,7 @@ def ingest_file(path, acc_id, buffer_location, buff, root, running_buffer_delete
 
         # If we buffered the file into safe storage somewhere in addition to the
         # origin media remove it now
-        if buffer_location is not None and running_buffer_delete:
+        if buffer_location is not None:
             remove(path)
         output['success'] = True
 
@@ -369,16 +369,6 @@ class AccUtil:
             "the ingested material belongs to, or 'new' to mint a new " +
             "accession identifier and apply it",
             type=str, action='store'
-        )
-        parser.add_argument(
-            "--running_buffer_delete",
-            help="If this argument is passed individual files will be " +
-            "deleted out of the buffer after they are POST'd to the " +
-            "ingress endpoint. If it isn't _you must clean up your " +
-            "buffer location manually_. If the location you are addressing " +
-            "is bigger than your buffering location, not passing this " +
-            "argument can result in your disk being filled.",
-            action='store_true', default=None
         )
         parser.add_argument(
             "--buffer_location", help="A location on disk to save " +
@@ -471,18 +461,6 @@ class AccUtil:
         else:
             self.buffer_location = None
         log.debug("buffer location: {}".format(str(self.buffer_location)))
-
-        if isinstance(args.running_buffer_delete, bool):
-            self.running_buffer_delete = args.running_buffer_delete
-        elif isinstance(config["DEFAULT"].getboolean(
-                "RUNNING_BUFFER_DELETE"), bool):
-            self.running_buffer_delete = config["DEFAULT"].getboolean(
-                "RUNNING_BUFFER_DELETE")
-        else:
-            self.running_buffer_delete = False
-        log.debug(
-            "running buffer delete: {}".format(str(self.running_buffer_delete))
-        )
 
         if args.receipt_dir:
             self.receipt_dir = args.receipt_dir
@@ -588,7 +566,7 @@ class AccUtil:
         return ingest_file(
             path, self.acc_id,
             self.buffer_location, self.buff, self.root,
-            self.running_buffer_delete, self.archstor_url,
+            self.archstor_url,
             self.acc_endpoint,
             self.qremis_url
         )
