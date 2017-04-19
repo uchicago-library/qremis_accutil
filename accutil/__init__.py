@@ -125,12 +125,15 @@ def split_and_post_record(qremis_record, qremis_api_url):
     except KeyError:
         pass
 
-    for relationship in qremis_record.get_relationship():
-        resp = requests.post(
-            qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
-        )
-        if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
-            raise ValueError("problem posting relationship")
+    try:
+        for relationship in qremis_record.get_relationship():
+            resp = requests.post(
+                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+            )
+            if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
+                raise ValueError("problem posting relationship")
+    except KeyError:
+        pass
 
     try:
         for rights in qremis_record.get_rights():
@@ -175,12 +178,14 @@ def add_objId_to_acc(acc_idnest_url, acc_id, identifier):
 
 
 def confirm_remote_copy_matches(identifier, archstor_url, comp_md5, buff):
+    # TODO: Intelligently handle removing objects whose fixitys don't match?
+    # or maybe reporting a fixity check failure event?
     with TemporaryDirectory() as tmp_dir:
         dl_copy_path = join(tmp_dir, uuid4().hex)
         dl_copy = requests.get(archstor_url+identifier, stream=True)
         dl_copy.raise_for_status()
         with open(dl_copy_path, 'wb') as f:
-            for chunk in dl_copy.iter_content(chunk_size=1024):
+            for chunk in dl_copy.iter_content(chunk_size=buff):
                 f.write(chunk)
 
         remote_md5 = md5(dl_copy_path, buff)
@@ -252,6 +257,43 @@ def build_and_post_ingest_event(identifier, qremis_api_url):
     split_and_post_record(ingest_qremis_rec, qremis_api_url)
 
 
+def build_and_post_ingest_failure_event(identifier, qremis_api_url):
+    ingest_event = pyqremis.Event(
+        pyqremis.EventIdentifier(
+            eventIdentifierType="uuid",
+            eventIdentifierValue=uuid4().hex
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="Ingestion failed into the long term storage environment"
+        ),
+        eventOutcomeInformation=pyqremis.EventOutcomeInformation(
+            eventOutcome="failure"
+        ),
+        eventType="ingest",
+        eventDateTime=datetime.now().isoformat()
+    )
+
+    ingest_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=identifier
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=ingest_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=ingest_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to its original ingest failure event."
+    )
+    ingest_qremis_rec = pyqremis.Qremis(ingest_event, ingest_relationship)
+    split_and_post_record(ingest_qremis_rec, qremis_api_url)
+
+
 def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url):
     fixity_event = pyqremis.Event(
         pyqremis.EventIdentifier(
@@ -292,14 +334,33 @@ def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api
     split_and_post_record(fixity_qremis_rec, qremis_api_url)
 
 
+def mint_run_event():
+    event = pyqremis.Event(
+        pyqremis.EventIdentifier(
+            eventIdentifierType="uuid",
+            eventIdentifierValue=uuid4().hex
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="The ingest run which encompasses individual ingest events"
+        ),
+        eventType="ingest",
+        eventDateTime=datetime.now().isoformat()
+    )
+    return event
+
+
 def ingest_file(path, acc_id, buffer_location, buff, root,
-                archstor_url, acc_idnest_url, qremis_api_url,
+                archstor_url, acc_idnest_url, qremis_api_url, run_event,
                 confirm=False):
 
     # TODO: Handle failure at different parts of the accessioning
     # process intelligently, reporting the events via qremis
 
     output = {}
+    objIdentifier = pyqremis.ObjectIdentifier(objectIdentifierType="uuid",
+                                              objectIdentifierValue=uuid4().hex)
+
+    output['objectIdentifier'] = objIdentifier.get_objectIdentifierValue()
 
     try:
         output['filepath'] = sanitize_path(fsencode(path))
@@ -319,7 +380,7 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
             secure_incoming_file(path, buffer_location, buff)
 
         # TODO: Handle remote qremis generation
-        qremis_record = make_record(path, originalName=output['originalName'])
+        qremis_record = make_record(path, originalName=output['originalName'], objectIdentifier=objIdentifier)
         identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
         output['object_id'] = identifier
 
@@ -352,11 +413,32 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
             remove(path)
         output['success'] = True
 
-        return output
-
     except Exception as e:
-        raise
+        try:
+            build_and_post_ingest_failure_event(objIdentifier.get_objectIdentifierValue(), qremis_api_url)
+        except Exception as e:
+            log.critical("An error occured in reporting an error event to the qremis api")
         output['data'] = "{}: {}".format(str(type(e)), str(e))
+        output['success'] = False
+
+    run_event_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=objIdentifier.get_objectIdentifierValue()
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=run_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=run_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to its original run event."
+    )
+    split_and_post_record(pyqremis.Qremis(run_event_relationship), qremis_api_url)
     return output
 
 
@@ -536,9 +618,10 @@ class AccUtil:
             log.critical(msg)
             raise RuntimeError(msg)
 
-        # TODO
-        # Create a "run" event to link all ingest events to.
-        pass
+        # Create a "run" event to link all ingested object records to.
+        self.run_event = mint_run_event()
+        split_and_post_record(pyqremis.Qremis(self.run_event), self.qremis_url)
+        print(self.run_event.get_eventIdentifier()[0].get_eventIdentifierValue())
 
         # Handle ingesting a single file
         if target.is_file():
@@ -598,6 +681,7 @@ class AccUtil:
             self.archstor_url,
             self.acc_endpoint,
             self.qremis_url,
+            self.run_event,
             confirm=self.confirm
         )
 
