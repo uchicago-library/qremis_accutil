@@ -621,7 +621,6 @@ class AccUtil:
         # Create a "run" event to link all ingested object records to.
         self.run_event = mint_run_event()
         split_and_post_record(pyqremis.Qremis(self.run_event), self.qremis_url)
-        print(self.run_event.get_eventIdentifier()[0].get_eventIdentifierValue())
 
         # Handle ingesting a single file
         if target.is_file():
@@ -670,9 +669,10 @@ class AccUtil:
         output['file_results'] = r
         receipt_fname = str(Path(self.receipt_dir, datetime.now().isoformat() +
                                  "_" + uuid4().hex + ".json"))
+        output['run_eventIdentifierValue'] = self.run_event.get_eventIdentifier()[0].get_eventIdentifierValue()
         with open(receipt_fname, 'w') as f:
             dump(output, f, indent=4)
-        print("Your receipt is saved on disk at: {}".format(receipt_fname))
+        log.info("Your receipt is saved on disk at: {}".format(receipt_fname))
 
     def ingest_file(self, path):
         return ingest_file(
