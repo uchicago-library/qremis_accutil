@@ -13,6 +13,7 @@ for a digital repository.
 - [qremiser](https://github.com/bnbalsamo/qremiser): A python library/microservice for generating qremis from files
 - [qremis_api](https://github.com/bnbalsamo/qremis_api): An API for managing qremis records
 - [archstor](https://github.com/bnbalsamo/archstor): A web gateway for unifying object storage technologies
+- [idnest](https://github.com/uchicago-library/idnest): An API for nested identifier association.
 
 
 
