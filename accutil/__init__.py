@@ -411,11 +411,11 @@ class AccUtil:
             action='store', default=None
         )
         parser.add_argument(
-            "--receipt-dir", help="A directory to deposit receipt files in.",
+            "--receipt_dir", help="A directory to deposit receipt files in.",
             default=None
         )
         parser.add_argument(
-            "--qremis-url", help="The URL of the root of the qremis API",
+            "--qremis_url", help="The URL of the root of the qremis API",
             default=None
         )
         parser.add_argument(

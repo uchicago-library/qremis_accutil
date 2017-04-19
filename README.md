@@ -24,8 +24,8 @@ $ accession --help
 usage: accession [-h] [--buffer_location BUFFER_LOCATION] [--buff BUFF]
                  [--verbosity VERBOSITY] [--resume RESUME]
                  [--source_root SOURCE_ROOT] [--filter_pattern FILTER_PATTERN]
-                 [--accessions_url ACCESSIONS_URL] [--receipt-dir RECEIPT_DIR]
-                 [--qremis-url QREMIS_URL] [--archstor_url ARCHSTOR_URL]
+                 [--accessions_url ACCESSIONS_URL] [--receipt_dir RECEIPT_DIR]
+                 [--qremis_url QREMIS_URL] [--archstor_url ARCHSTOR_URL]
                  [--confirm]
                  target accession_id
 
@@ -55,9 +55,9 @@ optional arguments:
                         Regexes to use to exclude files whose rel paths match.
   --accessions_url ACCESSIONS_URL
                         The url of the accessions idnest.
-  --receipt-dir RECEIPT_DIR
+  --receipt_dir RECEIPT_DIR
                         A directory to deposit receipt files in.
-  --qremis-url QREMIS_URL
+  --qremis_url QREMIS_URL
                         The URL of the root of the qremis API
   --archstor_url ARCHSTOR_URL
                         The URL of the root of the archstor API
