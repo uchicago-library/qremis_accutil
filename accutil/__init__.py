@@ -47,7 +47,7 @@ def sanitize_path(some_path):
     return bytes(some_path).hex()
 
 
-def md5(path, buff=1024*8):
+def md5(path, buff):
     hasher = _md5()
     with open(path, 'rb') as f:
         data = f.read(buff)
@@ -174,7 +174,7 @@ def add_objId_to_acc(acc_idnest_url, acc_id, identifier):
     assert(idnest_resp.json()['Added'][0]['identifier'] == identifier)
 
 
-def confirm_remote_copy_matches(identifier, archstor_url, comp_md5):
+def confirm_remote_copy_matches(identifier, archstor_url, comp_md5, buff):
     with TemporaryDirectory() as tmp_dir:
         dl_copy_path = join(tmp_dir, uuid4().hex)
         dl_copy = requests.get(archstor_url+identifier, stream=True)
@@ -183,7 +183,7 @@ def confirm_remote_copy_matches(identifier, archstor_url, comp_md5):
             for chunk in dl_copy.iter_content(chunk_size=1024):
                 f.write(chunk)
 
-        remote_md5 = md5(dl_copy_path)
+        remote_md5 = md5(dl_copy_path, buff)
         if remote_md5 != comp_md5:
             raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, comp_md5))
     return remote_md5
@@ -335,7 +335,7 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
         if confirm:
             fixity_md5 = confirm_remote_copy_matches(
                 identifier, archstor_url,
-                output['buffered_md5'] if output['buffered_md5'] else output['orig_md5']
+                output['buffered_md5'] if output['buffered_md5'] else output['orig_md5'], buff
             )
             build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url)
 
@@ -491,7 +491,7 @@ class AccUtil:
         elif isinstance(config["DEFAULT"].getint("BUFF"), int):
             self.buff = config["DEFAULT"].getint("BUFF")
         else:
-            self.buff = 1024*1000*8
+            self.buff = 1024*8
         log.debug("buff: {}".format(str(self.buff)))
 
         if args.archstor_url:

@@ -17,6 +17,7 @@ for a digital repository.
 
 
 ## Usage
+
 ```
 $ accession --help
 usage: accession [-h] [--buffer_location BUFFER_LOCATION] [--buff BUFF]
@@ -24,6 +25,7 @@ usage: accession [-h] [--buffer_location BUFFER_LOCATION] [--buff BUFF]
                  [--source_root SOURCE_ROOT] [--filter_pattern FILTER_PATTERN]
                  [--accessions_url ACCESSIONS_URL] [--receipt-dir RECEIPT_DIR]
                  [--qremis-url QREMIS_URL] [--archstor_url ARCHSTOR_URL]
+                 [--confirm]
                  target accession_id
 
 positional arguments:
@@ -46,7 +48,8 @@ optional arguments:
                         Resume a previously started run by specifying
                         receipt(s) which contains errors.
   --source_root SOURCE_ROOT
-                        The root of the directory that needs to be accessioned.
+                        The root of the directory that needs to be
+                        accessioned.
   --filter_pattern FILTER_PATTERN
                         Regexes to use to exclude files whose rel paths match.
   --accessions_url ACCESSIONS_URL
@@ -56,5 +59,9 @@ optional arguments:
   --qremis-url QREMIS_URL
                         The URL of the root of the qremis API
   --archstor_url ARCHSTOR_URL
+                        The URL of the root of the archstor API
+  --confirm             Redownload all objects after uploading to confirm
+                        transfer to the object store. Utilizes the buffer
+                        location.
 ```
 * All URLs should include trailing slashes
