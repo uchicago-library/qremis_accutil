@@ -12,12 +12,12 @@ from multiprocessing.pool import ThreadPool
 import logging
 from datetime import datetime
 from tempfile import TemporaryDirectory
-#from random import randint
 
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 from qremiser.blueprint.lib import make_record
+import pyqremis
 
 __author__ = "Brian Balsamo"
 __email__ = "balsamo@uchicago.edu"
@@ -47,7 +47,7 @@ def sanitize_path(some_path):
     return bytes(some_path).hex()
 
 
-def md5(path, buff=1024*8):
+def md5(path, buff):
     hasher = _md5()
     with open(path, 'rb') as f:
         data = f.read(buff)
@@ -104,167 +104,258 @@ def get_config(config_file=None):
     return ConfigParser()
 
 
-def ingest_file(*args):
-    path = args[0]
-    acc_id = args[1]
-    buffer_location = args[2]
-    buff = args[3]
-    root = args[4]
-    running_buffer_delete = args[5]
-    archstor_url = args[6]
-    acc_idnest_url = args[7]
-    qremis_api_url = args[8]
-
-    output = {}
-    output['filepath'] = sanitize_path(fsencode(path))
-    if root is not None:
-        output['root'] = sanitize_path(fsencode(root))
-    else:
-        output['root'] = None
-    output['success'] = False
-    output['data'] = {}
-
+def split_and_post_record(qremis_record, qremis_api_url):
     try:
-        # faking failures for debugging
-        # if randint(0, 1) == 0:
-        #     msg = "This is a test error!"
-        #     log.critical(msg)
-        #     raise RuntimeError(msg)
-        data = {}
-        data['accession_id'] = acc_id
-        # Compute our originalName from the path, considering it relative to a
-        # root if one was provided
-        if root is not None:
-            originalName = str(Path(path).relative_to(root))
-        else:
-            originalName = path
-        data['name'] = sanitize_path(fsencode(originalName))
-
-        # If a buffer location is specified, copy the file to there straight
-        # away so we don't stress the original media. Then confirm the copy if
-        # possible (otherwise emit a warning) and work with that copy from
-        # there.
-        # TODO: Handling of partial reads?
-        precomputed_md5 = None
-        if buffer_location is not None:
-            tmp_path = str(Path(buffer_location, uuid4().hex))
-            with open(path, 'rb') as src:
-                with open(tmp_path, 'wb') as dst:
-                    d = src.read(buff)
-                    while d:
-                        dst.write(d)
-                        d = src.read(buff)
-            precomputed_md5 = md5(tmp_path, buff)
-            if not precomputed_md5 == md5(path, buff):
-                log.warn("The buffered file's md5 does not equal the origin md5!")
-            path = Path(tmp_path)
-
-        # Re-use our hash of the buffer location if we have it precomputed.
-        if precomputed_md5:
-            data['md5'] = precomputed_md5
-        else:
-            data['md5'] = md5(path, buff)
-        output['data']['md5'] = data['md5']
-
-        # TODO: Handle remote qremis generation
-        qremis_record = make_record(path, originalName=data['name'])
-        identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
-
-        # POST qremis
         for obj in qremis_record.get_object():
             resp = requests.post(
                 qremis_api_url+"object_list", data={"record": dumps(obj.to_dict())}
             )
             if resp.json()['id'] != obj.get_objectIdentifier()[0].get_objectIdentifierValue():
                 raise ValueError("problem posting object")
+    except KeyError:
+        pass
+
+    try:
         for event in qremis_record.get_event():
             resp = requests.post(
                 qremis_api_url+"event_list", data={"record": dumps(event.to_dict())}
             )
             if resp.json()['id'] != event.get_eventIdentifier()[0].get_eventIdentifierValue():
                 raise ValueError("problem posting event")
-        for relationship in qremis_record.get_relationship():
+    except KeyError:
+        pass
+
+    for relationship in qremis_record.get_relationship():
+        resp = requests.post(
+            qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+        )
+        if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
+            raise ValueError("problem posting relationship")
+
+    try:
+        for rights in qremis_record.get_rights():
             resp = requests.post(
-                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+                qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
             )
-            if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
-                raise ValueError("problem posting relationship")
+            if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
+                raise ValueError("problem posting rights")
+    except KeyError:
+        pass
+
+    try:
+        for agent in qremis_record.get_agent():
+            resp = requests.post(
+                qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
+            )
+            if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
+                raise ValueError("problem posting agent")
+    except KeyError:
+        pass
+
+
+def post_file_to_archstor(identifier, fp, archstor_url):
+    with open(fp, "rb") as fd:
+        payload = {}
+        payload['object'] = ('object', fd)
+        ingress_post_multipart_encoder = MultipartEncoder(payload)
+        resp = requests.put(
+            archstor_url+identifier,
+            data=ingress_post_multipart_encoder,
+            headers={"Content-Type":
+                     ingress_post_multipart_encoder.content_type},
+            stream=True
+        )
+        assert(resp.json()['identifier'] == identifier)
+
+
+def add_objId_to_acc(acc_idnest_url, acc_id, identifier):
+    idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
+    idnest_resp.raise_for_status()
+    assert(idnest_resp.json()['Added'][0]['identifier'] == identifier)
+
+
+def confirm_remote_copy_matches(identifier, archstor_url, comp_md5, buff):
+    with TemporaryDirectory() as tmp_dir:
+        dl_copy_path = join(tmp_dir, uuid4().hex)
+        dl_copy = requests.get(archstor_url+identifier, stream=True)
+        dl_copy.raise_for_status()
+        with open(dl_copy_path, 'wb') as f:
+            for chunk in dl_copy.iter_content(chunk_size=1024):
+                f.write(chunk)
+
+        remote_md5 = md5(dl_copy_path, buff)
+        if remote_md5 != comp_md5:
+            raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, comp_md5))
+    return remote_md5
+
+
+def secure_incoming_file(path, buffer_location, buff):
+    if buffer_location is not None:
+        buffered = True
+        tmp_path = str(Path(buffer_location, uuid4().hex))
+        with open(path, 'rb') as src:
+            with open(tmp_path, 'wb') as dst:
+                d = src.read(buff)
+                while d:
+                    dst.write(d)
+                    d = src.read(buff)
+        buffered_md5 = md5(tmp_path, buff)
+        # Tolerate failures on the second read, but emit a warning
         try:
-            for rights in qremis_record.get_rights():
-                resp = requests.post(
-                    qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
-                )
-                if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
-                    raise ValueError("problem posting rights")
-        except KeyError:
-            pass
-        try:
-            for agent in qremis_record.get_agent():
-                resp = requests.post(
-                    qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
-                )
-                if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
-                    raise ValueError("problem posting agent")
-        except KeyError:
-            pass
+            original_md5 = md5(path, buff)
+        except IOError:
+            original_md5 = None
+        if buffered_md5 != original_md5:
+            log.warn("Buffered md5 != original md5! But no read errors reported on original write, continuing...")
+        path = Path(tmp_path)
+    else:
+        buffered = False
+        buffered_md5 = None
+        original_md5 = md5(path, buff)
+    return str(path), original_md5, buffered, buffered_md5
+
+
+def build_and_post_ingest_event(identifier, qremis_api_url):
+    ingest_event = pyqremis.Event(
+        pyqremis.EventIdentifier(
+            eventIdentifierType="uuid",
+            eventIdentifierValue=uuid4().hex
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="Ingestion confirmed into the long term storage environment"
+        ),
+        eventOutcomeInformation=pyqremis.EventOutcomeInformation(
+            eventOutcome="success"
+        ),
+        eventType="ingest",
+        eventDateTime=datetime.now().isoformat()
+    )
+
+    ingest_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=identifier
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=ingest_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=ingest_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to its original ingest event."
+    )
+    ingest_qremis_rec = pyqremis.Qremis(ingest_event, ingest_relationship)
+    split_and_post_record(ingest_qremis_rec, qremis_api_url)
+
+
+def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url):
+    fixity_event = pyqremis.Event(
+        pyqremis.EventIdentifier(
+            eventIdentifierType="uuid",
+            eventIdentifierValue=uuid4().hex
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="performed via md5 comparison of remote and local copies"
+        ),
+        pyqremis.EventDetailInformation(
+            eventDetail="computed md5 was: {}".format(fixity_md5)
+        ),
+        eventOutcomeInformation=pyqremis.EventOutcomeInformation(
+            eventOutcome="success"
+        ),
+        eventType="fixity check",
+        eventDateTime=datetime.now().isoformat()
+    )
+
+    fixity_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=identifier
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=fixity_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=fixity_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to a fixity check event which took place during original ingest."
+    )
+    fixity_qremis_rec = pyqremis.Qremis(fixity_event, fixity_relationship)
+    split_and_post_record(fixity_qremis_rec, qremis_api_url)
+
+
+def ingest_file(path, acc_id, buffer_location, buff, root,
+                archstor_url, acc_idnest_url, qremis_api_url,
+                confirm=False):
+
+    # TODO: Handle failure at different parts of the accessioning
+    # process intelligently, reporting the events via qremis
+
+    output = {}
+
+    try:
+        output['filepath'] = sanitize_path(fsencode(path))
+        if root is not None:
+            output['root'] = sanitize_path(fsencode(root))
+        else:
+            output['root'] = None
+        output['success'] = False
+        output['originalName'] = output['filepath'].lstrip(output['root'])
+        output['accession_id'] = acc_id
+
+        # If a buffer location is specified, copy the file to there straight
+        # away so we don't stress the original media. Then confirm the copy if
+        # possible (otherwise emit a warning) and work with that copy from
+        # there.
+        path, output['orig_md5'], output['buffered'], output['buffered_md5'] = \
+            secure_incoming_file(path, buffer_location, buff)
+
+        # TODO: Handle remote qremis generation
+        qremis_record = make_record(path, originalName=output['originalName'])
+        identifier = qremis_record.get_object()[0].get_objectIdentifier()[0].get_objectIdentifierValue()
+        output['object_id'] = identifier
+
+        # POST qremis
+        split_and_post_record(qremis_record, qremis_api_url)
+        log.debug("qremis POST'd")
 
         # POST object
-        with open(path, "rb") as fd:
-            payload = {}
-            payload['object'] = ('object', fd)
-            ingress_post_multipart_encoder = MultipartEncoder(payload)
-            resp = requests.put(
-                archstor_url+identifier,
-                data=ingress_post_multipart_encoder,
-                headers={"Content-Type":
-                         ingress_post_multipart_encoder.content_type},
-                stream=True
-            )
-
-        output['data']['object_id'] = identifier
+        post_file_to_archstor(identifier, path, archstor_url)
         log.debug("Content saved")
 
-        # GET object? <-- should this be conditional?
-        with TemporaryDirectory() as tmp_dir:
-            dl_copy_path = join(tmp_dir, uuid4().hex)
-            dl_copy = requests.get(archstor_url+identifier, stream=True)
-            dl_copy.raise_for_status()
-            with open(dl_copy_path, 'wb') as f:
-                for chunk in dl_copy.iter_content(chunk_size=1024):
-                    f.write(chunk)
-
-            # Compare <-- should this be conditional?
-            # TODO: Write this fixity check to the qremis db
-            remote_md5 = md5(dl_copy_path)
-            if remote_md5 != data['md5']:
-                raise RuntimeError("md5 mismatch from remote: {} != {}".format(remote_md5, data['md5']))
-            else:
-                output['data']['remote_fixity_check'] = True
+        # GET object if confirm
+        if confirm:
+            fixity_md5 = confirm_remote_copy_matches(
+                identifier, archstor_url,
+                output['buffered_md5'] if output['buffered_md5'] else output['orig_md5'], buff
+            )
+            build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url)
 
         # Add objID to Acc
-        idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
-        idnest_resp.raise_for_status()
+        add_objId_to_acc(acc_idnest_url, acc_id, identifier)
 
         # Add ingest event to qremis
-        # TODO
-
+        build_and_post_ingest_event(identifier, qremis_api_url)
         # Cleanup
 
         # If we buffered the file into safe storage somewhere in addition to the
         # origin media remove it now
-        if buffer_location is not None and running_buffer_delete:
+        if buffer_location is not None:
             remove(path)
         output['success'] = True
-
-        # If we redownloaded the file to check its remote storage is secure
-        # we remove it now
-        # TODO
-        # Note: With GridFS hardcoded in here instead of the materialsuite
-        # endpoint abstraction we can cheat for now with the GridOut.md5 attr
 
         return output
 
     except Exception as e:
+        raise
         output['data'] = "{}: {}".format(str(type(e)), str(e))
     return output
 
@@ -285,16 +376,6 @@ class AccUtil:
             type=str, action='store'
         )
         parser.add_argument(
-            "--running_buffer_delete",
-            help="If this argument is passed individual files will be " +
-            "deleted out of the buffer after they are POST'd to the " +
-            "ingress endpoint. If it isn't _you must clean up your " +
-            "buffer location manually_. If the location you are addressing " +
-            "is bigger than your buffering location, not passing this " +
-            "argument can result in your disk being filled.",
-            action='store_true', default=None
-        )
-        parser.add_argument(
             "--buffer_location", help="A location on disk to save " +
             "files briefly* from outside media to operate on. If not " +
             "specified the application will read straight from the outside " +
@@ -302,8 +383,7 @@ class AccUtil:
         )
         parser.add_argument(
             "--buff", help="How much data to load into RAM in one go for " +
-            "various operations. Currently the maximum for this should be " +
-            "~2*n bits in RAM, with n specified in this arg.",
+            "various operations.",
             type=int, action='store', default=None
         )
         parser.add_argument(
@@ -317,7 +397,7 @@ class AccUtil:
         )
         parser.add_argument(
             "--source_root", help="The root of the  " +
-            "directory that needs to be staged.",
+            "directory that needs to be accessioned.",
             type=str, action='store',
             default=None
         )
@@ -331,17 +411,23 @@ class AccUtil:
             action='store', default=None
         )
         parser.add_argument(
-            "--receipt-dir", help="A directory to deposit receipt files in.",
+            "--receipt_dir", help="A directory to deposit receipt files in.",
             default=None
         )
         parser.add_argument(
-            "--qremis-url", help="The URL of the root of the qremis API",
+            "--qremis_url", help="The URL of the root of the qremis API",
             default=None
         )
         parser.add_argument(
-            "--archstor_url",
+            "--archstor_url", help="The URL of the root of the archstor API",
             default=None
         )
+        parser.add_argument(
+            "--confirm", help="Redownload all objects after uploading to confirm " +
+            "transfer to the object store. Utilizes the buffer location.",
+            action='store_true'
+        )
+
         # Parse arguments into args namespace
         args = parser.parse_args()
 
@@ -386,18 +472,6 @@ class AccUtil:
             self.buffer_location = None
         log.debug("buffer location: {}".format(str(self.buffer_location)))
 
-        if isinstance(args.running_buffer_delete, bool):
-            self.running_buffer_delete = args.running_buffer_delete
-        elif isinstance(config["DEFAULT"].getboolean(
-                "RUNNING_BUFFER_DELETE"), bool):
-            self.running_buffer_delete = config["DEFAULT"].getboolean(
-                "RUNNING_BUFFER_DELETE")
-        else:
-            self.running_buffer_delete = False
-        log.debug(
-            "running buffer delete: {}".format(str(self.running_buffer_delete))
-        )
-
         if args.receipt_dir:
             self.receipt_dir = args.receipt_dir
         elif config["DEFAULT"].get("RECEIPT_DIR"):
@@ -417,7 +491,7 @@ class AccUtil:
         elif isinstance(config["DEFAULT"].getint("BUFF"), int):
             self.buff = config["DEFAULT"].getint("BUFF")
         else:
-            self.buff = 1024*1000*8
+            self.buff = 1024*8
         log.debug("buff: {}".format(str(self.buff)))
 
         if args.archstor_url:
@@ -435,6 +509,14 @@ class AccUtil:
         else:
             raise RuntimeError("No qremis api url specified via arg or conf")
         log.debug("qremis_url: {}".format(str(self.qremis_url)))
+
+        if args.confirm:
+            self.confirm = args.confirm
+        elif config["DEFAULT"].getboolean("CONFIRM"):
+            self.confirm = config["DEFAULT"].get("CONFIRM")
+        else:
+            self.confirm = False
+        log.debug("confirm: {}".format(str(self.qremis_url)))
         # Real work
 
         # If our acc id is given as "new" create a new one, check to be sure it
@@ -453,10 +535,16 @@ class AccUtil:
                 "accession identifier)"
             log.critical(msg)
             raise RuntimeError(msg)
+
+        # TODO
+        # Create a "run" event to link all ingest events to.
+        pass
+
         # Handle ingesting a single file
         if target.is_file():
             log.debug("Target is a file")
             r = self.ingest_file(str(target))
+
         # Handle ingesting matching files in a dir
         elif target.is_dir():
             log.debug("Target is a dir")
@@ -478,10 +566,13 @@ class AccUtil:
             msg = "Thats not a file or a dir!"
             log.critical(msg)
             raise ValueError(msg)
+
         # Make our results a list regardless, for ease of working with them in
         # the receipt context.
         if not isinstance(r, list):
             r = [r]
+
+        # Determine if we had any problems
         errors = False
         for x in r:
             if x['success'] != True:
@@ -491,6 +582,8 @@ class AccUtil:
             log.warn('Errors have been detected. Please review your receipt.')
         else:
             log.debug("No errors have been detected")
+
+        # Package up our results, save them to a file in the receipt dir
         output['file_results'] = r
         receipt_fname = str(Path(self.receipt_dir, datetime.now().isoformat() +
                                  "_" + uuid4().hex + ".json"))
@@ -502,9 +595,10 @@ class AccUtil:
         return ingest_file(
             path, self.acc_id,
             self.buffer_location, self.buff, self.root,
-            self.running_buffer_delete, self.archstor_url,
+            self.archstor_url,
             self.acc_endpoint,
-            self.qremis_url
+            self.qremis_url,
+            confirm=self.confirm
         )
 
     def ingest_dir(self, path, root=None, filters=[], omit_list=None):
