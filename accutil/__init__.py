@@ -354,14 +354,50 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
                 confirm=False):
 
     # TODO: Handle failure at different parts of the accessioning
-    # process intelligently, reporting the events via qremis
+    # process intelligently, reporting the events via qremis, rather
+    # than considering failure to be a flat case.
 
+    # mint the output dict
     output = {}
+
+    # Mint an object identifier for the file
     objIdentifier = pyqremis.ObjectIdentifier(objectIdentifierType="uuid",
                                               objectIdentifierValue=uuid4().hex)
 
+    # Throw the object identifier in the output dict
     output['objectIdentifier'] = objIdentifier.get_objectIdentifierValue()
 
+    # Link this object identifier to the run identifier
+    #
+    # NOTE: It is possible for creation of the object record itself
+    # to fail during the accessioning process. In this case though
+    # $qremis_api/object_list/$object_id will *not* contain a record
+    # $qremis_api/object_list/$object_id/linkedRelationships *will*
+    # contain a link to a relationship which connects the object identifier
+    # to an accessioning failure event.
+    # This allows us to "cheat" just a little bit, and reference objects
+    # for which we have _only_ minted an identifier, but not created a real
+    # record for yet.
+    run_event_relationship = pyqremis.Relationship(
+        pyqremis.RelationshipIdentifier(
+            relationshipIdentifierType="uuid",
+            relationshipIdentifierValue=uuid4().hex
+        ),
+        pyqremis.LinkingObjectIdentifier(
+            linkingObjectIdentifierType="uuid",
+            linkingObjectIdentifierValue=objIdentifier.get_objectIdentifierValue()
+        ),
+        pyqremis.LinkingEventIdentifier(
+            linkingEventIdentifierType=run_event.get_eventIdentifier()[0].get_eventIdentifierType(),
+            linkingEventIdentifierValue=run_event.get_eventIdentifier()[0].get_eventIdentifierValue()
+        ),
+        relationshipType="link",
+        relationshipSubType="simple",
+        relationshipRole="links the object to its original run event."
+    )
+    split_and_post_record(pyqremis.Qremis(run_event_relationship), qremis_api_url)
+
+    # Start the process of examining/moving the file, as specified by the user
     try:
         output['filepath'] = sanitize_path(fsencode(path))
         if root is not None:
@@ -392,21 +428,25 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
         post_file_to_archstor(identifier, path, archstor_url)
         log.debug("Content saved")
 
-        # GET object if confirm
+        # GET object if confirm, check fixity
+        # TODO: Handle fixity errors here in a better way than
+        # just raising an exception.
+        output['confirmation_md5'] = None
         if confirm:
             fixity_md5 = confirm_remote_copy_matches(
                 identifier, archstor_url,
                 output['buffered_md5'] if output['buffered_md5'] else output['orig_md5'], buff
             )
             build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api_url)
+            output['confirmation_md5'] = fixity_md5
 
         # Add objID to Acc
         add_objId_to_acc(acc_idnest_url, acc_id, identifier)
 
         # Add ingest event to qremis
         build_and_post_ingest_event(identifier, qremis_api_url)
-        # Cleanup
 
+        # Cleanup
         # If we buffered the file into safe storage somewhere in addition to the
         # origin media remove it now
         if buffer_location is not None:
@@ -417,28 +457,13 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
         try:
             build_and_post_ingest_failure_event(objIdentifier.get_objectIdentifierValue(), qremis_api_url)
         except Exception as e:
+            # This probably means the qremis API isn't working.
             log.critical("An error occured in reporting an error event to the qremis api")
+
+        # Populate _some_ useful output for the receipt/debugging
         output['data'] = "{}: {}".format(str(type(e)), str(e))
         output['success'] = False
 
-    run_event_relationship = pyqremis.Relationship(
-        pyqremis.RelationshipIdentifier(
-            relationshipIdentifierType="uuid",
-            relationshipIdentifierValue=uuid4().hex
-        ),
-        pyqremis.LinkingObjectIdentifier(
-            linkingObjectIdentifierType="uuid",
-            linkingObjectIdentifierValue=objIdentifier.get_objectIdentifierValue()
-        ),
-        pyqremis.LinkingEventIdentifier(
-            linkingEventIdentifierType=run_event.get_eventIdentifier()[0].get_eventIdentifierType(),
-            linkingEventIdentifierValue=run_event.get_eventIdentifier()[0].get_eventIdentifierValue()
-        ),
-        relationshipType="link",
-        relationshipSubType="simple",
-        relationshipRole="links the object to its original run event."
-    )
-    split_and_post_record(pyqremis.Qremis(run_event_relationship), qremis_api_url)
     return output
 
 
