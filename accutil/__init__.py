@@ -405,7 +405,10 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
         else:
             output['root'] = None
         output['success'] = False
-        output['originalName'] = output['filepath'].lstrip(output['root'])
+        if output['root'] is not None:
+            output['originalName'] = output['filepath'].split(output['root'])[1]
+        else:
+            output['originalName'] = output['filepath']
         output['accession_id'] = acc_id
 
         # If a buffer location is specified, copy the file to there straight
