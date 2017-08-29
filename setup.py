@@ -10,7 +10,7 @@ setup(
     name = 'accutil',
     description = "A tool for accessioning files",
     long_description = readme(),
-    version = '0.0.1dev',
+    version = '0.0.1',
     author = "Brian Balsamo",
     author_email = "balsamo@uchicago.edu",
     keywords = [
