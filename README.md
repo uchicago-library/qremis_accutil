@@ -1,5 +1,7 @@
 # accutil
 
+v0.0.1
+
 ## About
 
 The qremis accutil is a utility for performing accessions in the qremis based microservice environment
