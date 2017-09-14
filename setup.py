@@ -1,52 +1,44 @@
-from setuptools import setup
-from setuptools import find_packages
+from setuptools import setup, find_packages
 
 
 def readme():
-    with open('README.md', 'r') as f:
+    with open("README.md", 'r') as f:
         return f.read()
 
+
 setup(
-    name = 'accutil',
-    description = "A tool for accessioning files",
-    long_description = readme(),
-    version = '0.0.1',
-    author = "Brian Balsamo",
-    author_email = "balsamo@uchicago.edu",
-    keywords = [
-        "repository",
-        "file-level",
-        "processing"
-    ],
-    packages = find_packages(
-        exclude = [
-            "build",
-            "bin",
-            "dist",
+    name="accutil",
+    description="The qremis accutil is a utility for performing " +
+    "accessions in the qremis based microservice environment for a digital repository.",
+    version="0.0.1",
+    long_description=readme(),
+    author="Brian Balsamo",
+    author_email="brian@brianbalsamo.com",
+    packages=find_packages(
+        exclude=[
         ]
     ),
-    entry_points = {
-        'console_scripts':[
+    entry_points={
+        'console_scripts': [
             'accession = accutil:launch',
         ]
     },
-    classifiers = [
-        "Programming Language :: Python",
-        "Programming Language :: Python :: 3",
-        "Intended Audience :: Developers",
-        "Operating System :: Unix",
-        "Topic :: Software Development :: Libraries :: Python Modules",
-    ],
-    dependency_links = [
+    include_package_data=True,
+    url='https://github.com/bnbalsamo/accutil',
+    dependency_links=[
         'https://github.com/bnbalsamo/pyqremis' +
         '/tarball/master#egg=pyqremis',
         'https://github.com/bnbalsamo/qremiser' +
         '/tarball/master#egg=qremiser',
     ],
-    install_requires = [
+    install_requires=[
         'requests>0',
         'requests-toolbelt',
         'pyqremis',
         'qremiser'
-    ]
+    ],
+    tests_require=[
+        'pytest'
+    ],
+    test_suite='tests'
 )

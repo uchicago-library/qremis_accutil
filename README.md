@@ -2,11 +2,9 @@
 
 v0.0.1
 
-## About
+[![Build Status](https://travis-ci.org/bnbalsamo/qremis_accutil.svg?branch=master)](https://travis-ci.org/bnbalsamo/qremis_accutil) [![Coverage Status](https://coveralls.io/repos/github/bnbalsamo/qremis_accutil/badge.svg?branch=master)](https://coveralls.io/github/bnbalsamo/qremis_accutil?branch=master)
 
-The qremis accutil is a utility for performing accessions in the qremis based microservice environment
-for a digital repository.
-
+The qremis accutil is a utility for performing accessions in the qremis based microservice environment for a digital repository.
 
 ## Related Projects
 
@@ -68,3 +66,6 @@ optional arguments:
                         location.
 ```
 * All URLs should include trailing slashes
+
+# Author
+Brian Balsamo <brian@brianbalsamo.com>

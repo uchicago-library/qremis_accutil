@@ -1,3 +1,6 @@
+"""
+accutil
+"""
 from re import compile as re_compile
 from json import dumps, dump, load
 from pathlib import Path
@@ -20,8 +23,7 @@ from qremiser.blueprint.lib import make_record
 import pyqremis
 
 __author__ = "Brian Balsamo"
-__email__ = "balsamo@uchicago.edu"
-__publication__ = ""
+__email__ = "brian@brianbalsamo.com"
 __version__ = "0.0.1"
 
 
@@ -67,7 +69,7 @@ def mint_acc(acc_endpoint):
 
 
 def check_acc_exists(acc_endpoint, acc_id):
-    target_acc_url = acc_endpoint+acc_id + "/"
+    target_acc_url = acc_endpoint + acc_id + "/"
     try:
         resp = requests.get(target_acc_url)
         if not resp.status_code == 200:
@@ -108,7 +110,7 @@ def split_and_post_record(qremis_record, qremis_api_url):
     try:
         for obj in qremis_record.get_object():
             resp = requests.post(
-                qremis_api_url+"object_list", data={"record": dumps(obj.to_dict())}
+                qremis_api_url + "object_list", data={"record": dumps(obj.to_dict())}
             )
             if resp.json()['id'] != obj.get_objectIdentifier()[0].get_objectIdentifierValue():
                 raise ValueError("problem posting object")
@@ -118,7 +120,7 @@ def split_and_post_record(qremis_record, qremis_api_url):
     try:
         for event in qremis_record.get_event():
             resp = requests.post(
-                qremis_api_url+"event_list", data={"record": dumps(event.to_dict())}
+                qremis_api_url + "event_list", data={"record": dumps(event.to_dict())}
             )
             if resp.json()['id'] != event.get_eventIdentifier()[0].get_eventIdentifierValue():
                 raise ValueError("problem posting event")
@@ -128,7 +130,7 @@ def split_and_post_record(qremis_record, qremis_api_url):
     try:
         for relationship in qremis_record.get_relationship():
             resp = requests.post(
-                qremis_api_url+"relationship_list", data={"record": dumps(relationship.to_dict())}
+                qremis_api_url + "relationship_list", data={"record": dumps(relationship.to_dict())}
             )
             if resp.json()['id'] != relationship.get_relationshipIdentifier()[0].get_relationshipIdentifierValue():
                 raise ValueError("problem posting relationship")
@@ -138,7 +140,7 @@ def split_and_post_record(qremis_record, qremis_api_url):
     try:
         for rights in qremis_record.get_rights():
             resp = requests.post(
-                qremis_api_url+"rights_list", data={"record": dumps(rights.to_dict())}
+                qremis_api_url + "rights_list", data={"record": dumps(rights.to_dict())}
             )
             if resp.json()['id'] != rights.get_rightsIdentifier()[0].get_rightsIdentifierValue():
                 raise ValueError("problem posting rights")
@@ -148,7 +150,7 @@ def split_and_post_record(qremis_record, qremis_api_url):
     try:
         for agent in qremis_record.get_agent():
             resp = requests.post(
-                qremis_api_url+"agent_list", data={"record": dumps(agent.to_dict())}
+                qremis_api_url + "agent_list", data={"record": dumps(agent.to_dict())}
             )
             if resp.json()['id'] != agent.get_agentIdentifier()[0].get_agentIdentifierValue():
                 raise ValueError("problem posting agent")
@@ -162,7 +164,7 @@ def post_file_to_archstor(identifier, fp, archstor_url):
         payload['object'] = ('object', fd)
         ingress_post_multipart_encoder = MultipartEncoder(payload)
         resp = requests.put(
-            archstor_url+identifier,
+            archstor_url + identifier,
             data=ingress_post_multipart_encoder,
             headers={"Content-Type":
                      ingress_post_multipart_encoder.content_type},
@@ -172,7 +174,7 @@ def post_file_to_archstor(identifier, fp, archstor_url):
 
 
 def add_objId_to_acc(acc_idnest_url, acc_id, identifier):
-    idnest_resp = requests.post(acc_idnest_url+acc_id+"/", data={"member": identifier})
+    idnest_resp = requests.post(acc_idnest_url + acc_id + "/", data={"member": identifier})
     idnest_resp.raise_for_status()
     assert(idnest_resp.json()['Added'][0]['identifier'] == identifier)
 
@@ -182,7 +184,7 @@ def confirm_remote_copy_matches(identifier, archstor_url, comp_md5, buff):
     # or maybe reporting a fixity check failure event?
     with TemporaryDirectory() as tmp_dir:
         dl_copy_path = join(tmp_dir, uuid4().hex)
-        dl_copy = requests.get(archstor_url+identifier, stream=True)
+        dl_copy = requests.get(archstor_url + identifier, stream=True)
         dl_copy.raise_for_status()
         with open(dl_copy_path, 'wb') as f:
             for chunk in dl_copy.iter_content(chunk_size=buff):
@@ -363,7 +365,7 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
     try:
         # Mint an object identifier for the file
         objIdentifier = pyqremis.ObjectIdentifier(objectIdentifierType="uuid",
-                                                objectIdentifierValue=uuid4().hex)
+                                                  objectIdentifierValue=uuid4().hex)
 
         # Throw the object identifier in the output dict
         output['objectIdentifier'] = objIdentifier.get_objectIdentifierValue()
@@ -601,7 +603,7 @@ class AccUtil:
         elif isinstance(config["DEFAULT"].getint("BUFF"), int):
             self.buff = config["DEFAULT"].getint("BUFF")
         else:
-            self.buff = 1024*8
+            self.buff = 1024 * 8
         log.debug("buff: {}".format(str(self.buff)))
 
         if args.archstor_url:
@@ -665,7 +667,7 @@ class AccUtil:
                     with open(x) as f:
                         j = load(f)
                     for f_listing in j['file_results']:
-                        if f_listing['success'] == True:
+                        if f_listing['success'] is True:
                             omit_list.add(f_listing['filepath'])
             r = self.ingest_dir(
                 str(target), args.source_root,
@@ -685,7 +687,7 @@ class AccUtil:
         # Determine if we had any problems
         errors = False
         for x in r:
-            if x['success'] != True:
+            if x['success'] is not True:
                 errors = True
                 break
         if errors:
