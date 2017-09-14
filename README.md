@@ -1,6 +1,6 @@
 # accutil
 
-v0.0.1
+v0.0.2
 
 [![Build Status](https://travis-ci.org/bnbalsamo/qremis_accutil.svg?branch=master)](https://travis-ci.org/bnbalsamo/qremis_accutil) [![Coverage Status](https://coveralls.io/repos/github/bnbalsamo/qremis_accutil/badge.svg?branch=master)](https://coveralls.io/github/bnbalsamo/qremis_accutil?branch=master)
 
