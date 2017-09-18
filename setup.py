@@ -10,7 +10,7 @@ setup(
     name="accutil",
     description="The qremis accutil is a utility for performing " +
     "accessions in the qremis based microservice environment for a digital repository.",
-    version="0.0.2",
+    version="0.0.3",
     long_description=readme(),
     author="Brian Balsamo",
     author_email="brian@brianbalsamo.com",
