@@ -330,7 +330,8 @@ def build_and_post_initial_fixity_check_event(identifier, fixity_md5, qremis_api
         ),
         relationshipType="link",
         relationshipSubType="simple",
-        relationshipRole="links the object to a fixity check event which took place during original ingest."
+        relationshipRole="links the object to a fixity check event which took place " +
+        "during original ingest."
     )
     fixity_qremis_rec = pyqremis.Qremis(fixity_event, fixity_relationship)
     split_and_post_record(fixity_qremis_rec, qremis_api_url)
@@ -460,7 +461,9 @@ def ingest_file(path, acc_id, buffer_location, buff, root,
 
     except Exception as e:
         try:
-            build_and_post_ingest_failure_event(objIdentifier.get_objectIdentifierValue(), qremis_api_url)
+            build_and_post_ingest_failure_event(
+                objIdentifier.get_objectIdentifierValue(), qremis_api_url
+            )
         except Exception as e:
             # This probably means the qremis API isn't working.
             log.critical("An error occured in reporting an error event to the qremis api")
