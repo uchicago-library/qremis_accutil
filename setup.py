@@ -24,11 +24,11 @@ setup(
         ]
     },
     include_package_data=True,
-    url='https://github.com/bnbalsamo/accutil',
+    url='https://github.com/uchicago-library/accutil',
     dependency_links=[
-        'https://github.com/bnbalsamo/pyqremis' +
+        'https://github.com/uchicago-library/pyqremis' +
         '/tarball/master#egg=pyqremis',
-        'https://github.com/bnbalsamo/qremiser' +
+        'https://github.com/uchicago-library/qremiser' +
         '/tarball/master#egg=qremiser',
     ],
     install_requires=[

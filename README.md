@@ -2,17 +2,17 @@
 
 v0.0.3
 
-[![Build Status](https://travis-ci.org/bnbalsamo/qremis_accutil.svg?branch=master)](https://travis-ci.org/bnbalsamo/qremis_accutil) [![Coverage Status](https://coveralls.io/repos/github/bnbalsamo/qremis_accutil/badge.svg?branch=master)](https://coveralls.io/github/bnbalsamo/qremis_accutil?branch=master)
+[![Build Status](https://travis-ci.org/uchicago-library/qremis_accutil.svg?branch=master)](https://travis-ci.org/uchicago-library/qremis_accutil) [![Coverage Status](https://coveralls.io/repos/github/uchicago-library/qremis_accutil/badge.svg?branch=master)](https://coveralls.io/github/uchicago-library/qremis_accutil?branch=master)
 
 The qremis accutil is a utility for performing accessions in the qremis based microservice environment for a digital repository.
 
 ## Related Projects
 
-- [qremis](https://github.com/bnbalsamo/qremis): A preservation metadata specification
-- [pyqremis](https://github.com/bnbalsamo/pyqremis): A python library for working with qremis
-- [qremiser](https://github.com/bnbalsamo/qremiser): A python library/microservice for generating qremis from files
-- [qremis_api](https://github.com/bnbalsamo/qremis_api): An API for managing qremis records
-- [archstor](https://github.com/bnbalsamo/archstor): A web gateway for unifying object storage technologies
+- [qremis](https://github.com/uchicago-library/qremis): A preservation metadata specification
+- [pyqremis](https://github.com/uchicago-library/pyqremis): A python library for working with qremis
+- [qremiser](https://github.com/uchicago-library/qremiser): A python library/microservice for generating qremis from files
+- [qremis_api](https://github.com/uchicago-library/qremis_api): An API for managing qremis records
+- [archstor](https://github.com/uchicago-library/archstor): A web gateway for unifying object storage technologies
 - [idnest](https://github.com/uchicago-library/idnest): An API for nested identifier association.
 
 
